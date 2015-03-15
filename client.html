@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>sync test client</title>
+  </head>
+  <body>
+    <script>
+
+const SERVER_PORT = 5050;
+
+
+function connect(id, pass, device, connectCb) {
+  var reqId = 0;
+  var pushHandlers = {};
+  var errHandler = (err) => console.error(err);
+  var closeHandler = (code, why) => console.info('websocket closed', code, why);
+  var ws = new WebSocket('ws://127.0.0.1:' + SERVER_PORT);
+
+  function req(obj, cb) {
+    var _reqId = reqId++
+    var reqObj = Object.assign({}, obj, {_reqId});
+
+    ws.send(JSON.stringify(reqObj));
+    ws.addEventListener('message', handleReq);
+
+    function handleReq(resp) {
+      var data = JSON.parse(resp.data);
+      if (data._reqId === _reqId) {
+        ws.removeEventListener('message', handleReq);
+        delete data._reqId;
+        cb(null, data);
+      }
+    }
+  }
+  function rec(what, pushHandler) {
+    if (pushHandlers[what]) { console.warn('overwriting push handler for', what); }
+    pushHandlers[what] = pushHandler;
+  }
+  function close(code, message) { ws.close(code, message); }
+  function err(handler) { errHandler = handler; }
+
+  ws.addEventListener('open', () => {
+    function authFailed() { connectCb('Auth failed', null); }
+    ws.addEventListener('close', authFailed);
+    req({id, pass, device}, (err, res) => {
+      if (err) {
+        connectCb(err, null);
+      } else {
+        connectCb(null, {req, rec, close, closed, err});
+      }
+      ws.removeEventListener('close', authFailed);
+    });
+  });
+  ws.addEventListener('message', (resp) => {  // server pushes
+    console.log('m', resp);
+    var data = JSON.parse(resp.data);
+    if (data._push && pushHandlers[data._push]) {
+      delete data._push;
+      pushHandlers[data._push](data);
+    }
+  });
+  ws.addEventListener('error', (err) => errHandler(err));
+  ws.addEventListener('close', (code, why) => closeHandler(code, why));
+}
+
+
+connect('phil', 'abc', 'def', (err, res) => {
+  console.log('connected!', err, res);
+});
+
+
+// function beginSync() {
+//   ws.send(JSON.stringify({request: 'get:tasks'}));
+//   ws.addEventListener('message', function(message) {
+//     console.log('m', message);
+//     var tasks = JSON.parse(message.data);
+//     console.log('got some tasks yo', tasks);
+//   });
+// }
+
+// ws.addEventListener('error', function() {
+//   console.warn('ws error :(', arguments);
+// });
+
+// ws.addEventListener('close', function(code, why) {
+//   console.log('closed --', code, why);
+// });
+
+    </script>
+  </body>
+</html>

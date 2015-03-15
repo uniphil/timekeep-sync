@@ -1,0 +1,35 @@
+{
+  "name": "timekeep-sync",
+  "version": "0.0.1",
+  "description": "server sync app for timekeep.ca",
+  "main": "index.js",
+  "dependencies": {
+    "is-my-json-valid": "^2.10.0",
+    "lodash": "^3.5.0",
+    "redis": "^0.12.1",
+    "results": "^0.3.1",
+    "ws": "^0.7.1"
+  },
+  "devDependencies": {
+    "connect": "^3.3.4",
+    "serve-static": "^1.9.2"
+  },
+  "scripts": {
+    "start": "node --harmony index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uniphil/timekeep-sync"
+  },
+  "keywords": [
+    "timekeep",
+    "sync"
+  ],
+  "author": "uniphil",
+  "license": "GPLv2",
+  "bugs": {
+    "url": "https://github.com/uniphil/timekeep-sync/issues"
+  },
+  "homepage": "https://github.com/uniphil/timekeep-sync"
+}
