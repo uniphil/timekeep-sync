@@ -106,34 +106,37 @@ function tryAuth(authMessage, cb) {
 
 
 function welcome(friend, ws) {
-  var badMessageCount = 0;
   ws.on('message', (message) => {
     parseJSON(message)
       .andThen(validateWith(validators.request))
-      .andThen(routeRequest)
-      .orElse((err) => {
+      .andThen(requestRouter.bind(null, ws))
+      .orElse((message) => {
         console.log('could not route message', message);
-        if (++badMessageCount > 3) {
-          ws.close.apply(ws, c.TOO_MUCH_GARBAGE);
-        }
+        ws.send(JSON.stringify({_reqId: message._reqId, result: 'failure :('}));
       });
   });
+  setTimeout(() => {
+    ws.send(JSON.stringify({_push: 'tasks', data: [1, 2, 3]}));
+  }, 500);
 }
 
 
-function routeRequest(message) {
+function requestRouter(ws, message) {
   var task = {
-    'get:tasks': () => getTasks(),
+    'get:tasks': getTasks,
   }[message.request];
   if (!task) {
-    return Err();
+    return Err(message);
   } else {
-    return Ok(task(message.data));
+    task(message.data, (err, res) => {
+      ws.send(JSON.stringify({_reqId: message._reqId, result: 'blahblahblah'}));
+    });
+    return Ok('routed');
   }
 }
 
-function getTasks() {
-  console.log('tasks...');
+function getTasks(message, cb) {
+  cb(1);
 }
 
 
