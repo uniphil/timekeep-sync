@@ -109,34 +109,53 @@ function welcome(friend, ws) {
   ws.on('message', (message) => {
     parseJSON(message)
       .andThen(validateWith(validators.request))
-      .andThen(requestRouter.bind(null, ws))
-      .orElse((message) => {
-        console.log('could not route message', message);
-        ws.send(JSON.stringify({_reqId: message._reqId, result: 'failure :('}));
+      .andThen(requestRouter.bind(null, ws, friend))
+      .orElse((werr) => {
+        console.log('fail req', werr[0]);
+        ws.send(JSON.stringify({_reqId: werr[0], result: werr[1]}));
       });
   });
   setTimeout(() => {
-    ws.send(JSON.stringify({_push: 'tasks', data: [1, 2, 3]}));
+    var tasksKey = r.TASKS({userid: friend.userid});
+    redisClient.lrange(tasksKey, 0, -1, (err, res) => {
+      if (err) {
+        console.warn('boo getting tasks failed...');
+      } else {
+        ws.send(JSON.stringify({_push: 'tasks', data: res}));
+      }
+    });
   }, 500);
 }
 
 
-function requestRouter(ws, message) {
+function requestRouter(ws, friend, message) {
   var task = {
     'get:tasks': getTasks,
+    'put:tasks': putTasks,
   }[message.request];
   if (!task) {
-    return Err(message);
+    return Err([message._reqId, message]);
   } else {
-    task(message.data, (err, res) => {
-      ws.send(JSON.stringify({_reqId: message._reqId, result: 'blahblahblah'}));
+    task(message.data, friend, (err, res) => {
+      if (err) {
+        ws.send(JSON.stringify({_reqId: message._reqId, result: err}));
+      } else {
+        ws.send(JSON.stringify({_reqId: message._reqId, result: res}));
+      }
     });
     return Ok('routed');
   }
 }
 
-function getTasks(message, cb) {
-  cb(1);
+function getTasks(data, friend, cb) {
+  var tasksKey = r.TASKS({userid: friend.userid});
+  redisClient.lrange(tasksKey, 0, -1, (err, res) => err ? cb('redis :(') : cb(res));
+}
+
+function putTasks(data, friend, cb) {
+  var tasksKey = r.TASKS({userid: friend.userid});
+  console.log('pushing tasks', data)
+  redisClient.rpush([tasksKey].concat(data), (err, res) => err ? cb('redis :(') : cb(res));
 }
 
 
@@ -162,7 +181,7 @@ function validateWith(validate) {
     if (validate(data)) {
       return Ok(data);
     } else {
-      return Err(c.BAD_MESSAGE);
+      return Err([data._reqId, c.BAD_MESSAGE]);
     }
   }
 }

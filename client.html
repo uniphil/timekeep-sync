@@ -5,10 +5,11 @@
     <title>sync test client</title>
   </head>
   <body>
+    <button id="button">add task</button>
     <script>
 
 const SERVER_PORT = 5050;
-
+const button = document.getElementById('button');
 
 function connect(id, pass, device, connectCb) {
   var reqId = 0;
@@ -66,7 +67,7 @@ function connect(id, pass, device, connectCb) {
 }
 
 
-connect('phil', 'abc', 'def', (err, res) => {
+connect('bhil', 'abc', 'def', (err, res) => {
   if (err) {
     console.error('boo :(', err);
     return;
@@ -78,6 +79,17 @@ connect('phil', 'abc', 'def', (err, res) => {
 
   res.rec('tasks', function(data) {
     console.log('got tasks push!', data);
+  });
+
+  button.addEventListener('click', (e) => {
+    e.preventDefault;
+    res.req({request: 'put:tasks', data: ['a', 'b', 'c']}, (err, res) => {
+      if (err) {
+        console.log('putting tasks failed, boo');
+      } else {
+        console.log('woooo put tasks', res);
+      }
+    });
   });
 });
 

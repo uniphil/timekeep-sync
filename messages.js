@@ -24,10 +24,25 @@ var request = validator({
     {
       properties: {
         request: {
-          pattern: /^get:tasks$/
+          pattern: /^get:tasks$/,
         },
       },
       required: ['request'],
+    },
+    {
+      properties: {
+        request: {
+          pattern: /^put:tasks$/,
+        },
+        data: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          minItems: 1,
+        },
+      },
+      required: ['request', 'data'],
     },
   ],
 });
