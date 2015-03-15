@@ -106,6 +106,15 @@ function tryAuth(authMessage, cb) {
 
 
 function welcome(friend, ws) {
+
+  // redis pubsub
+  var updates = redis.createClient();
+  updates.on('message', (c, message) => {
+    ws.send(JSON.stringify({_push: 'tasks', data: message}));
+  });
+  updates.subscribe(friend.id);
+
+  // websocket req handling
   ws.on('message', (message) => {
     parseJSON(message)
       .andThen(validateWith(validators.request))
@@ -115,16 +124,6 @@ function welcome(friend, ws) {
         ws.send(JSON.stringify({_reqId: werr[0], result: werr[1]}));
       });
   });
-  setTimeout(() => {
-    var tasksKey = r.TASKS({userid: friend.userid});
-    redisClient.lrange(tasksKey, 0, -1, (err, res) => {
-      if (err) {
-        console.warn('boo getting tasks failed...');
-      } else {
-        ws.send(JSON.stringify({_push: 'tasks', data: res}));
-      }
-    });
-  }, 500);
 }
 
 
@@ -154,7 +153,8 @@ function getTasks(data, friend, cb) {
 
 function putTasks(data, friend, cb) {
   var tasksKey = r.TASKS({userid: friend.userid});
-  console.log('pushing tasks', data)
+  console.log('pushing tasks', data);
+  redisClient.publish(friend.id, data);
   redisClient.rpush([tasksKey].concat(data), (err, res) => err ? cb('redis :(') : cb(res));
 }
 
