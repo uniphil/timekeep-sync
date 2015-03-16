@@ -1,9 +1,10 @@
 var _ = require('lodash');
+var ws = require('ws');
 var http = require('http');
+var redis = require('redis');
+var bcrypt = require('bcrypt');
 var connect = require('connect');
 var serveStatic = require('serve-static');
-var redis = require('redis');
-var ws = require('ws');
 var results = require('results'),
     Ok = results.Ok,
     Err = results.Err,
@@ -30,9 +31,8 @@ const DB_ERROR = [4550, 'There is a probem at our end, sorry! :('];
 const BEST_WISHES = [4100, 'Later, friend :)'];
 
 
-const r = {
-// redis key templates
-  PASSWORD: _.template('passwords:<%= id %>'),
+const r = {  // redis key templates
+  AUTH: _.template('auths:<%= id %>'),
   TASKS: _.template('tasks:<%= id %>'),
   CHANNEL: _.template('channel:<%= id %>'),
 };
@@ -57,7 +57,7 @@ function initAuth(ws) {
 
   var timer = setTimeout(() => ws.close.apply(ws, TOO_SLOW), AUTH_TIMEOUT);
 
-  function challenge(message, flags) {
+  function challenge(message, flags) {  // WARNING message contains unhashed pw
     clearTimeout(timer);
     blockBinary(message, flags)
       .andThen(parseJSON)
@@ -83,6 +83,12 @@ function cbMatch(matches) {
     return (err ? Err(err) : Ok(res)).match(matches)
   };
 }
+function cbOrErr(cb, ok) {
+  return cbMatch({
+    Err: (err) => cb(Err(err)),
+    Ok: (res) => ok(res),
+  });
+}
 
 
 /**
@@ -90,27 +96,24 @@ function cbMatch(matches) {
  * This strategy avoids races between "does this user exist?" and "create".
  */
 function tryCreateOrAuth(authMessage, cb) {
-  var passKey = r.PASSWORD(authMessage);
+  var dangerPlainPass = authMessage.pass,
+      auth = _.omit(authMessage, 'pass'),
+      authKey = r.AUTH(auth);
 
-  redisClient.set(
-    passKey, authMessage.pass,
-    'NX',  // IMPORTANT -- ONLY create a user if they don't exist
-    cbMatch({
-      Ok: (res) =>
-        res === null ?  // res will be null if user id alrady exists
-          tryAuth() :
-          cb(Ok(authMessage)),  // we just saved a new user, woo!
-      Err: (err) => cb(Err(err)),
-    }));
+  // find out if we should create a new account or authenticate an existing one
+  // (with 'NX', redis SET returns Nil if the key exists)
+  redisClient.set(authKey, null, 'NX', cbOrErr(cb, (res) =>
+      res === null ? tryAuth() : tryCreate()));
 
   function tryAuth() {
-    redisClient.get(passKey, cbMatch({
-      Ok: (pass) =>
-        pass === authMessage.pass ?
-          cb(Ok(authMessage)) :
-          cb(Err(BAD_LOGIN)),
-      Err: (err) => cb(Err(err)),
-    }));
+    redisClient.get(authKey, cbOrErr(cb, (savedHash) =>
+      bcrypt.compare(dangerPlainPass, savedHash, cbOrErr(cb, (matched) =>
+        matched ? cb(Ok(auth)) : cb(Err(BAD_LOGIN))))));
+  }
+
+  function tryCreate() {
+    bcrypt.hash(dangerPlainPass, 8, cbOrErr(cb, (hashedPass) =>
+      redisClient.set(authKey, hashedPass, cbOrErr(cb, () => cb(Ok(auth))))));
   }
 }
 
@@ -178,6 +181,7 @@ function putTasks(friend, message, respCbs) {
 
 
 function blockBinary(message, flags) {
+  // WARNING message may contain unhashed pw
   if (flags.binary) {
     return Err(NO_BINARY_ALLOWED);
   }
@@ -185,6 +189,7 @@ function blockBinary(message, flags) {
 }
 
 function parseJSON(message) {
+  // WARNING message may contain unhashed pw
   var messageObj;
   try {
     messageObj = JSON.parse(message);
@@ -196,6 +201,7 @@ function parseJSON(message) {
 
 function validateWith(validate) {
   return function(data) {
+    // WARNING data may contain unhashed pw
     if (validate(data)) {
       return Ok(data);
     } else {
