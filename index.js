@@ -91,17 +91,18 @@ function cbMatch(matches) {
  */
 function tryCreateOrAuth(authMessage, cb) {
   var passKey = r.PASSWORD(authMessage);
+
   redisClient.set(
-    passKey,
-    authMessage.pass,
+    passKey, authMessage.pass,
     'NX',  // IMPORTANT -- ONLY create a user if they don't exist
     cbMatch({
-      Ok: (pass) =>
-        pass !== null ?
-          cb(Ok(authMessage)) :  // saved new user, woo!
-          tryAuth(),
+      Ok: (res) =>
+        res === null ?  // res will be null if user id alrady exists
+          tryAuth() :
+          cb(Ok(authMessage)),  // we just saved a new user, woo!
       Err: (err) => cb(Err(err)),
     }));
+
   function tryAuth() {
     redisClient.get(passKey, cbMatch({
       Ok: (pass) =>
@@ -122,6 +123,8 @@ function welcome(friend, ws) {
     ws.send(JSON.stringify({_push: 'tasks', data: message}));
   });
   updates.subscribe(r.CHANNEL(friend));
+
+  ws.on('close', updates.quit.bind(updates));
 
   // websocket req handling
   ws.on('message', (message) => {
