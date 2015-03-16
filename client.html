@@ -8,8 +8,9 @@
     <button id="button">add task</button>
     <script>
 
-const SERVER_PORT = 5050;
 const button = document.getElementById('button');
+const SERVER_PORT = 5050;
+const OK = 4200;
 
 function connect(id, pass, device, connectCb) {
   var reqId = 0;
@@ -26,11 +27,15 @@ function connect(id, pass, device, connectCb) {
     ws.addEventListener('message', handleReq);
 
     function handleReq(resp) {
-      var data = JSON.parse(resp.data);
+      try {
+        var data = JSON.parse(resp.data);
+      } catch (e) { console.error(resp, resp.data, e); return; }
       if (data._reqId === _reqId) {
         ws.removeEventListener('message', handleReq);
         delete data._reqId;
-        cb(null, data);
+        data.status === OK ?
+          cb(null, data) :
+          cb(data.status, null);
       }
     }
   }
@@ -46,16 +51,16 @@ function connect(id, pass, device, connectCb) {
     function authFailed() { connectCb('Auth failed', null); }
     ws.addEventListener('close', authFailed);
     req({id, pass, device}, (err, res) => {
-      if (err) {
-        connectCb(err, null);
-      } else {
+      err ?
+        connectCb(err, null) :
         connectCb(null, {req, rec, close, handleClose, handleErr});
-      }
       ws.removeEventListener('close', authFailed);
     });
   });
   ws.addEventListener('message', (resp) => {  // server pushes
-    var data = JSON.parse(resp.data);
+    try {
+      var data = JSON.parse(resp.data);
+    } catch (e) { console.error(resp, resp.data, e); return; }
     if (data._push && pushHandlers[data._push]) {
       var pushing = data._push;
       delete data._push;
@@ -67,7 +72,7 @@ function connect(id, pass, device, connectCb) {
 }
 
 
-connect('bhil', 'abc', 'def', (err, res) => {
+connect('phil', 'abc', 'def', (err, res) => {
   if (err) {
     console.error('boo :(', err);
     return;
@@ -84,11 +89,9 @@ connect('bhil', 'abc', 'def', (err, res) => {
   button.addEventListener('click', (e) => {
     e.preventDefault;
     res.req({request: 'put:tasks', data: ['a', 'b', 'c']}, (err, res) => {
-      if (err) {
-        console.log('putting tasks failed, boo');
-      } else {
+      err ?
+        console.log('putting tasks failed, boo', err) :
         console.log('woooo put tasks', res);
-      }
     });
   });
 });

@@ -1,4 +1,4 @@
-var template = require('lodash').template;
+var _ = require('lodash');
 var http = require('http');
 var connect = require('connect');
 var serveStatic = require('serve-static');
@@ -11,36 +11,36 @@ var results = require('results'),
     None = results.None;
 var validators = require('./messages');
 
+// websocket constants
+const SERVER_PORT = 5050;
+const AUTH_TIMEOUT = 1000;
 
-var c = {
-  // websocket constants
-  SERVER_PORT: 5050,
-  AUTH_TIMEOUT: 1000,
+// req response codes
+const OK = 4200;
+const SERVER_ERR = 4500;
 
-  // close codes
-  NO_BINARY_ALLOWED: [4000, 'Binary messages are not allowed :('],
-  NOT_JSON: [4001, 'Message could not be parsed as JSON :('],
-  BAD_MESSAGE: [4002, 'Message failed to validate :('],
-  BAD_LOGIN: [4003, 'The supplied login credentials were not valid :('],
-  TOO_SLOW: [4004, 'Did not hear back in time about our future... :('],
-  TOO_MUCH_GARBAGE: [4005, 'Too many bad messages. It\'s just not working for us :('],
+// close codes
+const NO_BINARY_ALLOWED = [4000, 'Binary messages are not allowed :('];
+const NOT_JSON = [4001, 'Message could not be parsed as JSON :('];
+const BAD_MESSAGE = [4002, 'Message failed to validate :('];
+const BAD_LOGIN = [4003, 'The supplied login credentials were not valid :('];
+const TOO_SLOW = [4004, 'Did not hear back in time about our future... :('];
+const TOO_MUCH_GARBAGE = [4005, 'Too many bad messages. It\'s just not working for us :('];
+const DB_ERROR = [4550, 'There is a probem at our end, sorry! :('];
+const BEST_WISHES = [4100, 'Later, friend :)'];
 
-  DB_ERROR: [4500, 'There is a probem at our end, sorry! :('],
 
-  BEST_WISHES: [4100, 'Later, friend :)'],
+const r = {
+// redis key templates
+  PASSWORD: _.template('passwords:<%= id %>'),
+  TASKS: _.template('tasks:<%= id %>'),
+  CHANNEL: _.template('channel:<%= id %>'),
 };
-
-var r = {
-  // redis key templates
-  PASSWORD: template('passwords:<%= userid %>'),
-  TASKS: template('tasks:<%= userid %>'),
-  CHANNEL: template('channel:<%= userid %>'),
-}
 
 var app = connect();
 app.use(serveStatic('./'));
 var server = http.createServer(app)
-server.listen(c.SERVER_PORT)
+server.listen(SERVER_PORT)
 
 
 var wss = new ws.Server({server: server});
@@ -55,7 +55,7 @@ redisClient.on('error', (err) => console.error('Redis client error', err));
 function initAuth(ws) {
   ws.on('message', challenge);
 
-  var timer = setTimeout(() => ws.close.apply(ws, c.TOO_SLOW), c.AUTH_TIMEOUT);
+  var timer = setTimeout(() => ws.close.apply(ws, TOO_SLOW), AUTH_TIMEOUT);
 
   function challenge(message, flags) {
     clearTimeout(timer);
@@ -64,10 +64,10 @@ function initAuth(ws) {
       .andThen(validateWith(validators.auth))
       .orElse((anyLastWords) => Err(ws.close.apply(ws, anyLastWords)))
       .andThen((clientMessage) =>
-        tryAuth(clientMessage, (authorized) =>
+        tryCreateOrAuth(clientMessage, (authorized) =>
           authorized.match({
             Ok: (friend) => {
-              ws.send(JSON.stringify({_reqId: friend._reqId}));
+              ws.send(JSON.stringify({_reqId: friend._reqId, status: OK}));
               welcome(friend, ws);
             },
             Err: (why) => ws.close.apply(ws, why),
@@ -78,30 +78,39 @@ function initAuth(ws) {
 }
 
 
+function cbMatch(matches) {
+  return (err, res) => {
+    return (err ? Err(err) : Ok(res)).match(matches)
+  };
+}
+
+
 /**
  * Try to create a new user, falling back on authenticating an existing user.
  * This strategy avoids races between "does this user exist?" and "create".
  */
-function tryAuth(authMessage, cb) {
-  var passKey = r.PASSWORD({userid: authMessage.id});
-  redisClient.set(passKey, authMessage.pass, 'NX',  // IMPORTANT -- ONLY create a user if they don't exist
-    (err, res) => {
-      if (err) {
-        cb(Err(c.DB_ERROR));
-      } else if (res !== null) {  // new user, woo!
-        cb(Ok(authMessage));
-      } else {  // exising user, try to authenticate
-        redisClient.get(passKey, (err, res) => {
-          if (err) {
-            cb(Err(c.DB_ERROR));
-          } else if (res === authMessage.pass) {
-            cb(Ok(authMessage));
-          } else {
-            cb(Err(c.BAD_LOGIN));
-          }
-        });
-      }
-    });
+function tryCreateOrAuth(authMessage, cb) {
+  var passKey = r.PASSWORD(authMessage);
+  redisClient.set(
+    passKey,
+    authMessage.pass,
+    'NX',  // IMPORTANT -- ONLY create a user if they don't exist
+    cbMatch({
+      Ok: (pass) =>
+        pass !== null ?
+          cb(Ok(authMessage)) :  // saved new user, woo!
+          tryAuth(),
+      Err: (err) => cb(Err(err)),
+    }));
+  function tryAuth() {
+    redisClient.get(passKey, cbMatch({
+      Ok: (pass) =>
+        pass === authMessage.pass ?
+          cb(Ok(authMessage)) :
+          cb(Err(BAD_LOGIN)),
+      Err: (err) => cb(Err(err)),
+    }));
+  }
 }
 
 
@@ -112,56 +121,62 @@ function welcome(friend, ws) {
   updates.on('message', (c, message) => {
     ws.send(JSON.stringify({_push: 'tasks', data: message}));
   });
-  updates.subscribe(friend.id);
+  updates.subscribe(r.CHANNEL(friend));
 
   // websocket req handling
   ws.on('message', (message) => {
+    var reqId = null,
+        respCbs = {
+          Ok: (resp) => ws.send(JSON.stringify(_.extend({status: OK}, resp, reqId))),
+          Err: (err) => ws.send(JSON.stringify(_.extend({status: SERVER_ERR}, err, reqId))),
+        };
+
+    function extractReqId(obj) {
+      reqId = _.pick(obj, '_reqId');
+      return Ok(_.omit(obj, '_reqId'));
+    }
+
     parseJSON(message)
+      .andThen(extractReqId)
       .andThen(validateWith(validators.request))
-      .andThen(requestRouter.bind(null, ws, friend))
-      .orElse((werr) => {
-        console.log('fail req', werr[0]);
-        ws.send(JSON.stringify({_reqId: werr[0], result: werr[1]}));
-      });
+      .andThen(requestRouter.bind(null, friend, respCbs))
+      .orElse(respCbs.Err);
   });
+
 }
 
 
-function requestRouter(ws, friend, message) {
+function requestRouter(friend, respCbs, message) {
   var task = {
     'get:tasks': getTasks,
     'put:tasks': putTasks,
   }[message.request];
   if (!task) {
-    return Err([message._reqId, message]);
-  } else {
-    task(message.data, friend, (err, res) => {
-      if (err) {
-        ws.send(JSON.stringify({_reqId: message._reqId, result: err}));
-      } else {
-        ws.send(JSON.stringify({_reqId: message._reqId, result: res}));
-      }
-    });
-    return Ok('routed');
+    return Err({data: 'nothing to do for ' + task});
   }
+  task(friend, message, respCbs);
+  return Ok('routed');
 }
 
-function getTasks(data, friend, cb) {
-  var tasksKey = r.TASKS({userid: friend.userid});
-  redisClient.lrange(tasksKey, 0, -1, (err, res) => err ? cb('redis :(') : cb(res));
+function getTasks(friend, mesasge, respCbs) {
+  redisClient.lrange(r.TASKS(friend), 0, -1, cbMatch({
+    Ok: (tasks) => respCbs.Ok({data: tasks}),
+    Err: (err)  => respCbs.Err({data: 'redis :('}),
+  }));
 }
 
-function putTasks(data, friend, cb) {
-  var tasksKey = r.TASKS({userid: friend.userid});
-  console.log('pushing tasks', data);
-  redisClient.publish(friend.id, data);
-  redisClient.rpush([tasksKey].concat(data), (err, res) => err ? cb('redis :(') : cb(res));
+function putTasks(friend, message, respCbs) {
+  redisClient.publish(r.CHANNEL(friend), message.data);
+  redisClient.rpush([r.TASKS(friend)].concat(message.data), cbMatch({
+    Ok: (res) => respCbs.Ok({data: res}),
+    Err: (err) => respCbs.Err({data: 'redis :('}),
+  }));
 }
 
 
 function blockBinary(message, flags) {
   if (flags.binary) {
-    return Err(c.NO_BINARY_ALLOWED);
+    return Err(NO_BINARY_ALLOWED);
   }
   return Ok(message);
 }
@@ -171,7 +186,7 @@ function parseJSON(message) {
   try {
     messageObj = JSON.parse(message);
   } catch (e) {
-    return Err(c.NOT_JSON);
+    return Err(NOT_JSON);
   }
   return Ok(messageObj);
 }
@@ -181,7 +196,7 @@ function validateWith(validate) {
     if (validate(data)) {
       return Ok(data);
     } else {
-      return Err([data._reqId, c.BAD_MESSAGE]);
+      return Err([data._reqId, BAD_MESSAGE]);
     }
   }
 }
