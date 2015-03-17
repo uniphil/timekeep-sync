@@ -4,6 +4,7 @@
   "description": "server sync app for timekeep.ca",
   "main": "index.js",
   "dependencies": {
+    "bcrypt": "^0.8.1",
     "is-my-json-valid": "^2.10.0",
     "lodash": "^3.5.0",
     "redis": "^0.12.1",
